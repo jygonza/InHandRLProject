@@ -22,13 +22,13 @@ print(f"Observation space: {env.observation_space.shape}")
 print(f"Action space: {env.action_space.shape}")
 
 # --- TODO: Initialize your Agent ---
-# agent = MyRLAgent(
-#     obs_space_shape=env.observation_space.shape,
-#     action_space_shape=env.action_space.shape,
-#     learning_rate=LEARNING_RATE,
-#     device=DEVICE
-# )
-# agent.load_model("my_agent.pth") # Optional: to continue training
+#agent = MyRLAgent(
+#    obs_space_shape=env.observation_space.shape,
+#    action_space_shape=env.action_space.shape,
+#    learning_rate=LEARNING_RATE,
+#    device=DEVICE
+#)
+#agent.load_model("my_agent.pth") # Optional: to continue training
 
 print("Starting training...")
 
