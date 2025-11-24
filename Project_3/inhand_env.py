@@ -5,7 +5,7 @@ import mujoco
 import mujoco.viewer as mjv
 import gymnasium as gym
 from gymnasium import spaces
-
+from scipy.spatial.transform import Rotation as R   
 from simulation import Simulation
 
 MAX_EPISODE_STEPS = 300
@@ -48,19 +48,47 @@ class CanRotateEnv(gym.Env):
         self.step_count = 0
 
     def _get_obs(self):
+        # 16 finger joint angles
         finger_qpos = np.array([self.sim.data.qpos[self.sim.model.jnt_qposadr[j]] for j in self.sim.hand_joint_ids]) #
+
+        # 7 object pose values (position + orientation as quaternion)
         obj_jnt_adr = self.sim.model.body_jntadr[self.obj_body_id] #
         obj_qpos_adr = self.sim.model.jnt_qposadr[obj_jnt_adr] #
         object_pose = self.sim.data.qpos[obj_qpos_adr : obj_qpos_adr + 7] #
-        return np.concatenate([finger_qpos, object_pose])
+
+        # position and orientation extraction
+        x, y, z = object_pose[0:3]
+        qw, qx, qy, qz = object_pose[3:7]
+
+        # Convert quaternion to Euler angles (in degrees)
+        rot = R.from_quat([qx, qy, qz, qw])
+        roll_deg, pitch_deg, yaw_deg = rot.as_euler('xyz', degrees=True)
+
+        # Distance cube-palm
+        cube_pos = self.sim.data.xpos[self.obj_body_id] 
+        palm_pos = self.sim.data.site_xpos[self.site_id] 
+        distance_cube_palm = np.linalg.norm(cube_pos - palm_pos)
+
+        obs = np.concatenate(
+            [finger_qpos, 
+             np.array([x, y, z, roll_deg, pitch_deg, yaw_deg, distance_cube_palm], dtype=np.float32)]
+        )
+
+        return obs.astype(np.float32)
 
     def _calculate_reward(self):
         # --- Rotation and Survival Rewards ---
         obj_vel = np.zeros(6)
-        mujoco.mj_objectVelocity(self.sim.model, self.sim.data, mujoco.mjtObj.mjOBJ_BODY, self.obj_body_id, obj_vel, 0)
+        mujoco.mj_objectVelocity(
+            self.sim.model, self.sim.data, 
+            mujoco.mjtObj.mjOBJ_BODY, self.obj_body_id, 
+            obj_vel, 0)
+        
+
         angular_velocity_z = obj_vel[2]
         rotation_reward = angular_velocity_z * 10.0
         
+        # cube-palm distance survival rewards
         can_pos = self.sim.data.xpos[self.obj_body_id]
         palm_pos = self.sim.data.site_xpos[self.site_id]
         distance_from_palm = np.linalg.norm(can_pos - palm_pos)
@@ -94,9 +122,25 @@ class CanRotateEnv(gym.Env):
             contact_reward = 5.0  # Large, one-time bonus for achieving the grasp
         elif len(fingers_in_contact) > 0:
             contact_reward = 0.5 * len(fingers_in_contact) # Smaller reward for partial contact
-            
+        
+        # -- tilt reward -- # (optional)
+        obs = self._get_obs()
+        roll = obs[19]
+        pitch = obs[20]
+
+        tilt_deg = np.sqrt(roll**2 + pitch**2)
+        tilt_threshold = 20.0  # degrees
+        max_tilt = 90.0  # degrees
+
+        # mostly want to just punish too much tilt -> danger situation
+        if tilt_deg < tilt_threshold:
+            tilt_reward = 0.0
+        else:
+            too_much_tilt = min(tilt_deg, max_tilt) - tilt_threshold
+            tilt_reward = -5.0 * (too_much_tilt / (max_tilt - tilt_threshold))
         # Combine all reward components
-        total_reward = rotation_reward + survival_reward + contact_reward
+        total_reward = rotation_reward + survival_reward + contact_reward + tilt_reward
+
         return total_reward
 
     def _is_terminated(self):
